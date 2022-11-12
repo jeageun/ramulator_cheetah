@@ -14,6 +14,8 @@
 #include "WideIO2.h"
 #include "HBM.h"
 #include "SALP.h"
+#include "Statistics.h"
+
 
 using namespace ramulator;
 
@@ -33,16 +35,21 @@ Gem5Wrapper::Gem5Wrapper(const Config& configs, int cacheline)
     assert(name_to_func.find(std_name) != name_to_func.end() && "unrecognized standard name");
     mem = name_to_func[std_name](configs, cacheline);
     tCK = mem->clk_ns();
+    Stats::statlist.output(std_name+".stats");
+    Stats::reset_stats();
+
 }
 
 
 Gem5Wrapper::~Gem5Wrapper() {
+    Stats::statlist.printall();
     delete mem;
 }
 
 void Gem5Wrapper::tick()
 {
     mem->tick();
+    Stats::curTick++;
 }
 
 bool Gem5Wrapper::send(Request req)

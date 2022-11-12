@@ -9,8 +9,10 @@
 #include <list>
 #include <functional>
 #include <cassert>
+#include <utility>
 
 using namespace std;
+using namespace std::placeholders;
 
 namespace ramulator
 {
@@ -106,55 +108,8 @@ public:
 
 private:
     typedef list<Request>::iterator ReqIter;
-    function<ReqIter(ReqIter, ReqIter)> compare[int(Type::MAX)] = {
-        // FCFS
-        [this] (ReqIter req1, ReqIter req2) {
-            if (req1->arrive <= req2->arrive) return req1;
-            return req2;},
-
-        // FRFCFS
-        [this] (ReqIter req1, ReqIter req2) {
-            bool ready1 = this->ctrl->is_ready(req1);
-            bool ready2 = this->ctrl->is_ready(req2);
-
-            if (ready1 ^ ready2) {
-                if (ready1) return req1;
-                return req2;
-            }
-
-            if (req1->arrive <= req2->arrive) return req1;
-            return req2;},
-
-        // FRFCFS_CAP
-        [this] (ReqIter req1, ReqIter req2) {
-            bool ready1 = this->ctrl->is_ready(req1);
-            bool ready2 = this->ctrl->is_ready(req2);
-
-            ready1 = ready1 && (this->ctrl->rowtable->get_hits(req1->addr_vec) <= this->cap);
-            ready2 = ready2 && (this->ctrl->rowtable->get_hits(req2->addr_vec) <= this->cap);
-
-            if (ready1 ^ ready2) {
-                if (ready1) return req1;
-                return req2;
-            }
-
-            if (req1->arrive <= req2->arrive) return req1;
-            return req2;},
-        // FRFCFS_PriorHit
-        [this] (ReqIter req1, ReqIter req2) {
-            bool ready1 = this->ctrl->is_ready(req1) && this->ctrl->is_row_hit(req1);
-            bool ready2 = this->ctrl->is_ready(req2) && this->ctrl->is_row_hit(req2);
-
-            if (ready1 ^ ready2) {
-                if (ready1) return req1;
-                return req2;
-            }
-
-            if (req1->arrive <= req2->arrive) return req1;
-            return req2;}
-    };
-};
-
+    function<ReqIter(ReqIter, ReqIter)> compare[int(Type::MAX)];
+ };
 
 template <typename T>
 class RowPolicy
@@ -168,7 +123,44 @@ public:
 
     int timeout = 50;
 
-    RowPolicy(Controller<T>* ctrl) : ctrl(ctrl) {}
+    RowPolicy(Controller<T>* _ctrl) : ctrl(_ctrl) {
+      // Closed
+      policy[0] = std::bind([] (typename T::Command cmd, RowPolicy *obj) -> vector<int> {
+            for (auto& kv : obj->ctrl->rowtable->table) {
+                if (!obj->ctrl->is_ready(cmd, kv.first))
+                    continue;
+                return kv.first;
+            }
+            return vector<int>();}, _1, this);
+
+        // ClosedAP
+      policy[1] = std::bind([] (typename T::Command cmd, RowPolicy *obj) -> vector<int> {
+	  for (auto& kv : obj->ctrl->rowtable->table) {
+	    if (!obj->ctrl->is_ready(cmd, kv.first))
+	      continue;
+	    return kv.first;
+	  }
+	  return vector<int>();}, _1, this);
+
+        // Opened
+      policy[2] = std::bind([] (typename T::Command cmd, RowPolicy *obj) -> vector<int> {
+	  return vector<int>();}, _1, this); 
+
+      // Timeout
+      policy[3] = std::bind([] (typename T::Command cmd, RowPolicy *obj) -> vector<int> {
+	  for (auto& kv : obj->ctrl->rowtable->table) {
+	    auto& entry = kv.second;
+	    if (obj->ctrl->clk - entry.timestamp < obj->timeout)
+	      continue;
+	    if (!obj->ctrl->is_ready(cmd, kv.first))
+	      continue;
+	    return kv.first;
+	  }
+	  return vector<int>();}, _1, this); 
+
+
+
+    }
 
     vector<int> get_victim(typename T::Command cmd)
     {
@@ -176,42 +168,7 @@ public:
     }
 
 private:
-    function<vector<int>(typename T::Command)> policy[int(Type::MAX)] = {
-        // Closed
-        [this] (typename T::Command cmd) -> vector<int> {
-            for (auto& kv : this->ctrl->rowtable->table) {
-                if (!this->ctrl->is_ready(cmd, kv.first))
-                    continue;
-                return kv.first;
-            }
-            return vector<int>();},
-
-        // ClosedAP
-        [this] (typename T::Command cmd) -> vector<int> {
-            for (auto& kv : this->ctrl->rowtable->table) {
-                if (!this->ctrl->is_ready(cmd, kv.first))
-                    continue;
-                return kv.first;
-            }
-            return vector<int>();},
-
-        // Opened
-        [this] (typename T::Command cmd) {
-            return vector<int>();},
-
-        // Timeout
-        [this] (typename T::Command cmd) -> vector<int> {
-            for (auto& kv : this->ctrl->rowtable->table) {
-                auto& entry = kv.second;
-                if (this->ctrl->clk - entry.timestamp < timeout)
-                    continue;
-                if (!this->ctrl->is_ready(cmd, kv.first))
-                    continue;
-                return kv.first;
-            }
-            return vector<int>();}
-    };
-
+    function<vector<int>(typename T::Command)> policy[int(Type::MAX)];
 };
 
 
@@ -304,7 +261,8 @@ public:
 
         return itr->second.row;
     }
-};
+ };
+
 
 } /*namespace ramulator*/
 
